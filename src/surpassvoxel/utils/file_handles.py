@@ -54,13 +54,16 @@ def save_yaml(data: Any, path: str | Path) -> None:
 
 _logging_init: threading.Lock = threading.Lock()
 _logging_files: dict[str, logging.Logger] = dict()
-def get_log(path: str | Path | None, *, init_level: int = logging.INFO) -> logging.Logger:
-    _NULL_LOGGER_NAME = "surpassvoxel.null"
-    _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
-    _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+
+def get_log(path: str | Path | None, *, init_level: int = logging.INFO) -> logging.Logger:
+    NULL_LOGGER_NAME = "surpassvoxel.null"
+    LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+    LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+    global _logging_files
     if path is None:
-        logger = logging.getLogger(_NULL_LOGGER_NAME)
+        logger = logging.getLogger(NULL_LOGGER_NAME)
         logger.propagate = False
         logger.setLevel(init_level)
         logger.handlers.clear()
@@ -83,7 +86,7 @@ def get_log(path: str | Path | None, *, init_level: int = logging.INFO) -> loggi
         logger.handlers.clear()
 
         handler = logging.FileHandler(path, encoding="utf-8")
-        handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+        handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT))
         logger.addHandler(handler)
 
         _logging_files[key] = logger
@@ -93,7 +96,11 @@ def get_log(path: str | Path | None, *, init_level: int = logging.INFO) -> loggi
 
 _keys_init: threading.Lock = threading.Lock()
 _keys_files: dict[str, tuple[Path, Any]] = dict()
+
+
 def get_config(name: str, *, path: str | Path | None = None) -> Any:
+
+    global _keys_files
     if path is None:
         with _keys_init:
             cached = _keys_files.get(name)

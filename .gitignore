@@ -54,4 +54,5 @@ wheels/
 uv.lock
 
 # Test
-tests
+tests/*
+!tests/.gitkeep
