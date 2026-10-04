@@ -55,6 +55,10 @@ class Voxel:
         return self._color_space_type
 
     @property
+    def color_space(self) -> ColorSpace:
+        return self._color_space
+
+    @property
     def size(self) -> int:
         return self._shape[0] * self._shape[1] * self._shape[2]
 
@@ -271,11 +275,25 @@ class Voxel:
         self._data = new
         return None
 
-    def rotate(self, axis: Vector, degrees: float, *, strict: bool = True) -> str | None:
+    def rotate(
+            self,
+            axis: tuple[float, float, float],
+            point: tuple[float, float, float],
+            degrees: float,
+            *,
+            strict: bool = True,
+            ) -> str | None:
+        try:
+            ax, ay, az = (float(value) for value in axis)
+            px, py, pz = (float(value) for value in point)
+        except (TypeError, ValueError):
+            return "rotation axis and point must be three finite numbers"
+        if not all(math.isfinite(value) for value in (ax, ay, az, px, py, pz)):
+            return "rotation axis and point must be three finite numbers"
+
         if degrees % 360 == 0:
             return None
 
-        ax, ay, az = map(float, axis.value)
         norm = math.sqrt(ax * ax + ay * ay + az * az)
         if norm == 0:
             return "rotation axis must be non-zero"
@@ -295,7 +313,7 @@ class Voxel:
             return None
 
         nx, ny, nz = self._shape
-        center = np.array([(nx - 1) / 2, (ny - 1) / 2, (nz - 1) / 2], dtype=np.float64)
+        pivot = np.array([px, py, pz], dtype=np.float64)
 
         if strict:
             for x0 in range(0, nx, 16):
@@ -304,21 +322,21 @@ class Voxel:
                 if not slice_occupied.any():
                     continue
                 ix, iy, iz = np.nonzero(slice_occupied)
-                points = np.stack((ix + x0 - center[0], iy - center[1], iz - center[2]), axis=0)
-                landed = np.floor(rotation @ points + center[:, None] + 0.5).astype(np.int64)
+                points = np.stack((ix + x0 - pivot[0], iy - pivot[1], iz - pivot[2]), axis=0)
+                landed = np.floor(rotation @ points + pivot[:, None] + 0.5).astype(np.int64)
                 if ((landed < 0) | (landed >= np.array(self._shape)[:, None])).any():
                     return "rotated voxels cross the voxel border"
 
         inverse = rotation.T
-        ys = np.arange(ny, dtype=np.float64) - center[1]
-        zs = np.arange(nz, dtype=np.float64) - center[2]
+        ys = np.arange(ny, dtype=np.float64) - pivot[1]
+        zs = np.arange(nz, dtype=np.float64) - pivot[2]
         new = np.zeros_like(self._data)
         for x0 in range(0, nx, 16):
             x1 = min(x0 + 16, nx)
-            xs = np.arange(x0, x1, dtype=np.float64) - center[0]
-            source_x = np.floor(inverse[0, 0] * xs[:, None, None] + inverse[0, 1] * ys[None, :, None] + inverse[0, 2] * zs[None, None, :] + center[0] + 0.5).astype(np.int64)
-            source_y = np.floor(inverse[1, 0] * xs[:, None, None] + inverse[1, 1] * ys[None, :, None] + inverse[1, 2] * zs[None, None, :] + center[1] + 0.5).astype(np.int64)
-            source_z = np.floor(inverse[2, 0] * xs[:, None, None] + inverse[2, 1] * ys[None, :, None] + inverse[2, 2] * zs[None, None, :] + center[2] + 0.5).astype(np.int64)
+            xs = np.arange(x0, x1, dtype=np.float64) - pivot[0]
+            source_x = np.floor(inverse[0, 0] * xs[:, None, None] + inverse[0, 1] * ys[None, :, None] + inverse[0, 2] * zs[None, None, :] + pivot[0] + 0.5).astype(np.int64)
+            source_y = np.floor(inverse[1, 0] * xs[:, None, None] + inverse[1, 1] * ys[None, :, None] + inverse[1, 2] * zs[None, None, :] + pivot[1] + 0.5).astype(np.int64)
+            source_z = np.floor(inverse[2, 0] * xs[:, None, None] + inverse[2, 1] * ys[None, :, None] + inverse[2, 2] * zs[None, None, :] + pivot[2] + 0.5).astype(np.int64)
             inside = (0 <= source_x) & (source_x < nx) & (0 <= source_y) & (source_y < ny) & (0 <= source_z) & (source_z < nz)
             block = np.zeros((x1 - x0, ny, nz, 4), dtype=np.uint8)
             if inside.any():
