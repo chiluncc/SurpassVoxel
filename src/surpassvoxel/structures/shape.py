@@ -46,9 +46,8 @@ def _masked_indices(
         ) -> _OutputType:
     nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
 
-    x0, x1 = max(v1.x, 0), min(v2.x, nx - 1)
-    y0, y1 = max(v1.y, 0), min(v2.y, ny - 1)
-    z0, z1 = max(v1.z, 0), min(v2.z, nz - 1)
+    x0, y0, z0 = (max(component, 0) for component in v1.value)
+    x1, y1, z1 = (min(component, size - 1) for component, size in zip(v2.value, (nx, ny, nz)))
     if x0 > x1 or y0 > y1 or z0 > z1:
         return np.empty(0, dtype=np.uint32)
 
@@ -80,7 +79,7 @@ class PointShape(BaseShape):
             value: _ItemType | None = None,
             ):
         super().__init__(mask=mask, value=value)
-        self._position = Vector(int(position.x), int(position.y), int(position.z))
+        self._position = position
 
     @property
     def position(self) -> Vector:
@@ -97,12 +96,7 @@ class PointShape(BaseShape):
         )
 
     def is_cross_border(self, data: _InputType) -> bool:
-        nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
-        return not (
-            0 <= self._position.x < nx
-            and 0 <= self._position.y < ny
-            and 0 <= self._position.z < nz
-        )
+        return not all(0 <= component < size for component, size in zip(self._position.value, data.shape))
 
 
 class BoxShape(BaseShape):
@@ -116,8 +110,8 @@ class BoxShape(BaseShape):
             value: _ItemType | None = None,
             ):
         super().__init__(mask=mask, value=value)
-        self._position = Vector(int(position.x), int(position.y), int(position.z))
-        self._size = Vector(int(size.x), int(size.y), int(size.z))
+        self._position = position
+        self._size = size
 
     @property
     def position(self) -> Vector:
@@ -138,11 +132,9 @@ class BoxShape(BaseShape):
         )
 
     def is_cross_border(self, data: _InputType) -> bool:
-        nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
-        return (
-            self._position.x < 0 or self._position.x + self._size.x > nx
-            or self._position.y < 0 or self._position.y + self._size.y > ny
-            or self._position.z < 0 or self._position.z + self._size.z > nz
+        return any(
+            position < 0 or position + size > limit
+            for position, size, limit in zip(self._position.value, self._size.value, data.shape)
         )
 
 
@@ -157,8 +149,8 @@ class SphereShape(BaseShape):
             value: _ItemType | None = None,
             ):
         super().__init__(mask=mask, value=value)
-        self._position = Vector(int(position.x), int(position.y), int(position.z))
-        self._radius = int(radius)
+        self._position = position
+        self._radius = radius
 
     @property
     def position(self) -> Vector:
@@ -169,9 +161,10 @@ class SphereShape(BaseShape):
         return self._radius
 
     def _mask_fn(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> np.ndarray:
-        distance = (xs[:, None, None] - self._position.x) ** 2
-        distance = distance + (ys[None, :, None] - self._position.y) ** 2
-        distance = distance + (zs[None, None, :] - self._position.z) ** 2
+        x, y, z = self._position.value
+        distance = (xs[:, None, None] - x) ** 2
+        distance = distance + (ys[None, :, None] - y) ** 2
+        distance = distance + (zs[None, None, :] - z) ** 2
         return distance <= self._radius ** 2
 
     def get_masked(self, data: _InputType) -> _OutputType:
@@ -186,11 +179,9 @@ class SphereShape(BaseShape):
         )
 
     def is_cross_border(self, data: _InputType) -> bool:
-        nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
-        return (
-            self._position.x - self._radius < 0 or self._position.x + self._radius >= nx
-            or self._position.y - self._radius < 0 or self._position.y + self._radius >= ny
-            or self._position.z - self._radius < 0 or self._position.z + self._radius >= nz
+        return any(
+            position - self._radius < 0 or position + self._radius >= limit
+            for position, limit in zip(self._position.value, data.shape)
         )
 
 
@@ -206,9 +197,9 @@ class CylinderShape(BaseShape):
             value: _ItemType | None = None,
             ):
         super().__init__(mask=mask, value=value)
-        self._position = Vector(int(position.x), int(position.y), int(position.z))
-        self._radius = int(radius)
-        self._y_size = int(y_size)
+        self._position = position
+        self._radius = radius
+        self._y_size = y_size
 
     @property
     def position(self) -> Vector:
@@ -223,7 +214,8 @@ class CylinderShape(BaseShape):
         return self._y_size
 
     def _mask_fn(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> np.ndarray:
-        distance = (xs[:, None, None] - self._position.x) ** 2 + (zs[None, None, :] - self._position.z) ** 2
+        x, _, z = self._position.value
+        distance = (xs[:, None, None] - x) ** 2 + (zs[None, None, :] - z) ** 2
         return np.broadcast_to(distance <= self._radius ** 2, (xs.size, ys.size, zs.size))
 
     def get_masked(self, data: _InputType) -> _OutputType:
@@ -238,11 +230,12 @@ class CylinderShape(BaseShape):
         )
 
     def is_cross_border(self, data: _InputType) -> bool:
+        x, y, z = self._position.value
         nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
         return (
-            self._position.x - self._radius < 0 or self._position.x + self._radius >= nx
-            or self._position.y < 0 or self._position.y + self._y_size > ny
-            or self._position.z - self._radius < 0 or self._position.z + self._radius >= nz
+            x - self._radius < 0 or x + self._radius >= nx
+            or y < 0 or y + self._y_size > ny
+            or z - self._radius < 0 or z + self._radius >= nz
         )
 
 
@@ -260,13 +253,9 @@ class PrismShape(BaseShape):
             value: _ItemType | None = None,
             ):
         super().__init__(mask=mask, value=value)
-        self._position = Vector(int(position.x), int(position.y), int(position.z))
-        self._vertices = (
-            Vector(int(v0.x), int(v0.y), int(v0.z)),
-            Vector(int(v1.x), int(v1.y), int(v1.z)),
-            Vector(int(v2.x), int(v2.y), int(v2.z)),
-        )
-        self._height = int(height)
+        self._position = position
+        self._vertices = (v0, v1, v2,)
+        self._height = height
 
     @property
     def position(self) -> Vector:
@@ -289,12 +278,7 @@ class PrismShape(BaseShape):
 
     @staticmethod
     def _outside(v1: Vector, v2: Vector, data: _InputType) -> bool:
-        nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
-        return (
-            v1.x < 0 or v2.x >= nx
-            or v1.y < 0 or v2.y >= ny
-            or v1.z < 0 or v2.z >= nz
-        )
+        return any(low < 0 or high >= limit for low, high, limit in zip(v1.value, v2.value, data.shape))
 
     @staticmethod
     def _half_space(
@@ -304,10 +288,12 @@ class PrismShape(BaseShape):
             normal: Vector,
             point: Vector,
             ) -> np.ndarray:
+        vx, vy, vz = normal.value
+        px, py, pz = point.value
         return (
-            normal.x * (xs[:, None, None] - point.x)
-            + normal.y * (ys[None, :, None] - point.y)
-            + normal.z * (zs[None, None, :] - point.z)
+            vx * (xs[:, None, None] - px)
+            + vy * (ys[None, :, None] - py)
+            + vz * (zs[None, None, :] - pz)
         )
 
     def _mask_fn(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> np.ndarray:
@@ -357,13 +343,8 @@ class PyramidShape(BaseShape):
             value: _ItemType | None = None,
             ):
         super().__init__(mask=mask, value=value)
-        self._position = Vector(int(position.x), int(position.y), int(position.z))
-        self._vertices = (
-            Vector(int(v0.x), int(v0.y), int(v0.z)),
-            Vector(int(v1.x), int(v1.y), int(v1.z)),
-            Vector(int(v2.x), int(v2.y), int(v2.z)),
-            Vector(int(v3.x), int(v3.y), int(v3.z)),
-        )
+        self._position = position
+        self._vertices = (v0, v1, v2, v3)
 
     @property
     def position(self) -> Vector:
@@ -382,12 +363,7 @@ class PyramidShape(BaseShape):
 
     @staticmethod
     def _outside(v1: Vector, v2: Vector, data: _InputType) -> bool:
-        nx, ny, nz = data.shape[0], data.shape[1], data.shape[2]
-        return (
-            v1.x < 0 or v2.x >= nx
-            or v1.y < 0 or v2.y >= ny
-            or v1.z < 0 or v2.z >= nz
-        )
+        return any(low < 0 or high >= limit for low, high, limit in zip(v1.value, v2.value, data.shape))
 
     @staticmethod
     def _half_space(
@@ -397,10 +373,12 @@ class PyramidShape(BaseShape):
             normal: Vector,
             point: Vector,
             ) -> np.ndarray:
+        vx, vy, vz = normal.value
+        px, py, pz = point.value
         return (
-            normal.x * (xs[:, None, None] - point.x)
-            + normal.y * (ys[None, :, None] - point.y)
-            + normal.z * (zs[None, None, :] - point.z)
+            vx * (xs[:, None, None] - px)
+            + vy * (ys[None, :, None] - py)
+            + vz * (zs[None, None, :] - pz)
         )
 
     def _mask_fn(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> np.ndarray:

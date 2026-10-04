@@ -17,7 +17,7 @@ def transform_to_magicvoxel(data: Voxel, path: Path) -> None:
     palette = np.zeros((256, 4), dtype=np.uint8)
     palette[:len(colors)] = colors
 
-    nx, ny, nz = data.shape[:3]
+    nx, ny, nz = data.shape
     flat = data.data
     idx = np.flatnonzero(flat[:, 0] & 0x80)
 

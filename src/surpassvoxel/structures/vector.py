@@ -20,6 +20,10 @@ class Vector:
         return self._z
 
     @property
+    def value(self) -> tuple[int, int, int]:
+        return (self._x, self._y, self._z)
+
+    @property
     def length2(self) -> int:
         return self._x * self._x + self._y * self._y + self._z * self._z
 
