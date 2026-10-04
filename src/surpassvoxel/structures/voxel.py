@@ -352,17 +352,6 @@ class Voxel:
             strict: bool = True,
             ) -> str | None:
 
-        def gather(shift: tuple[int, int, int]) -> np.ndarray:
-            return source[
-                np.clip(nearest[0] + shift[0] - low[0], 0, high[0] - low[0])[:, None, None],
-                np.clip(nearest[1] + shift[1] - low[1], 0, high[1] - low[1])[None, :, None],
-                np.clip(nearest[2] + shift[2] - low[2], 0, high[2] - low[2])[None, None, :],
-            ]
-
-        def weave(block: np.ndarray, weight: np.ndarray, axis: int) -> np.ndarray:
-            woven = np.einsum("ij,j...->i...", weight, np.moveaxis(block, axis, 0))
-            return np.moveaxis(woven, 0, axis)
-
         if not all(value > 0 for value in factor):
             return "scale factors must be positive"
 
@@ -409,6 +398,10 @@ class Voxel:
                 low[axis], high[axis],
             ).astype(np.int64))
 
+        def weave(block: np.ndarray, weight: np.ndarray, axis: int) -> np.ndarray:
+            woven = np.einsum("ij,j...->i...", weight, np.moveaxis(block, axis, 0))
+            return np.moveaxis(woven, 0, axis)
+
         total = np.ones([high[axis] - low[axis] + 1 for axis in range(3)], dtype=np.float32)
         filled = ((source[..., 0] & 0x80) != 0).astype(np.float32)
         core = filled.copy()
@@ -417,6 +410,13 @@ class Voxel:
             filled = weave(filled, weights[axis], axis)
             core = weave(core, cores[axis], axis)
         occupied = ((total > 0.0) & (filled >= 0.5 * total)) | (core >= 1.0 - 1e-6)
+
+        def gather(shift: tuple[int, int, int]) -> np.ndarray:
+            return source[
+                np.clip(nearest[0] + shift[0] - low[0], 0, high[0] - low[0])[:, None, None],
+                np.clip(nearest[1] + shift[1] - low[1], 0, high[1] - low[1])[None, :, None],
+                np.clip(nearest[2] + shift[2] - low[2], 0, high[2] - low[2])[None, None, :],
+            ]
 
         picked = gather((0, 0, 0))
         empty = occupied & ((picked[..., 0] & 0x80) == 0)
