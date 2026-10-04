@@ -278,18 +278,12 @@ class Voxel:
     def rotate(
             self,
             axis: tuple[float, float, float],
-            point: tuple[float, float, float],
             degrees: float,
             *,
+            point: tuple[float, float, float] | None = None,
             strict: bool = True,
             ) -> str | None:
-        try:
-            ax, ay, az = (float(value) for value in axis)
-            px, py, pz = (float(value) for value in point)
-        except (TypeError, ValueError):
-            return "rotation axis and point must be three finite numbers"
-        if not all(math.isfinite(value) for value in (ax, ay, az, px, py, pz)):
-            return "rotation axis and point must be three finite numbers"
+        ax, ay, az = axis
 
         if degrees % 360 == 0:
             return None
@@ -313,6 +307,11 @@ class Voxel:
             return None
 
         nx, ny, nz = self._shape
+        if point is None:
+            low, high = self.aabb()
+            px, py, pz = ((low.value[axis] + high.value[axis]) / 2.0 for axis in range(3))
+        else:
+            px, py, pz = point
         pivot = np.array([px, py, pz], dtype=np.float64)
 
         if strict:
@@ -345,29 +344,102 @@ class Voxel:
         self._data = new
         return None
 
-    def scale(self, factor: tuple[float, float, float], *, strict: bool = True) -> str | None:
-        fx, fy, fz = factor
-        if not all(math.isfinite(value) and value > 0 for value in (fx, fy, fz)):
+    def scale(
+            self,
+            factor: tuple[float, float, float],
+            *,
+            point: tuple[float, float, float] | None = None,
+            strict: bool = True,
+            ) -> str | None:
+
+        def gather(shift: tuple[int, int, int]) -> np.ndarray:
+            return source[
+                np.clip(nearest[0] + shift[0] - low[0], 0, high[0] - low[0])[:, None, None],
+                np.clip(nearest[1] + shift[1] - low[1], 0, high[1] - low[1])[None, :, None],
+                np.clip(nearest[2] + shift[2] - low[2], 0, high[2] - low[2])[None, None, :],
+            ]
+
+        def weave(block: np.ndarray, weight: np.ndarray, axis: int) -> np.ndarray:
+            woven = np.einsum("ij,j...->i...", weight, np.moveaxis(block, axis, 0))
+            return np.moveaxis(woven, 0, axis)
+
+        if not all(value > 0 for value in factor):
             return "scale factors must be positive"
+
+        pivot = list(point) if point is not None else None
 
         box = self.aabb()
         if box is None:
             return None
 
         low, high = list(box[0].value), list(box[1].value)
+        if all(value == 1.0 for value in factor):
+            return None
+        if pivot is None:
+            pivot = [(low[axis] + high[axis] + 1) / 2.0 for axis in range(3)]
 
-        source_axes = []
-        for axis, value in enumerate((fx, fy, fz)):
+        cells = []
+        for axis, value in enumerate(factor):
             extent = high[axis] - low[axis] + 1
-            size = max(1, math.ceil(extent * value))
-            if strict and low[axis] + size > self._shape[axis]:
+            size = max(1, int(math.floor(extent * value + 0.5)))
+            image = pivot[axis] + (low[axis] - pivot[axis]) * value
+            first = int(math.floor(image + (extent * value - size) / 2.0 + 0.5))
+            last = first + size - 1
+            if strict and (first < 0 or last >= self._shape[axis]):
                 return "scaled voxels cross the voxel border"
-            size = min(size, self._shape[axis] - low[axis])
-            source_axes.append(low[axis] + np.floor(np.arange(size) / value).astype(np.int64))
+            cells.append([max(first, 0), min(last, self._shape[axis] - 1)])
+        if any(first > last for first, last in cells):
+            self._data.fill(0)
+            return None
+
+        source = self._data[low[0]:high[0] + 1, low[1]:high[1] + 1, low[2]:high[2] + 1]
+
+        weights, cores, nearest = [], [], []
+        for axis, value in enumerate(factor):
+            index = np.arange(cells[axis][0], cells[axis][1] + 1, dtype=np.float64)
+            before = pivot[axis] + (index - pivot[axis]) / value
+            after = pivot[axis] + (index + 1 - pivot[axis]) / value
+            edges = np.arange(low[axis], high[axis] + 2, dtype=np.float64)
+            overlap = np.minimum(after[:, None], edges[None, 1:]) - np.maximum(before[:, None], edges[None, :-1])
+            overlap = np.clip(overlap, 0.0, None)
+            weights.append(overlap.astype(np.float32))
+            cores.append((overlap >= 0.5 * min(1.0, 1.0 / value)).astype(np.float32))
+            nearest.append(np.clip(
+                np.floor(pivot[axis] + (index + 0.5 - pivot[axis]) / value),
+                low[axis], high[axis],
+            ).astype(np.int64))
+
+        total = np.ones([high[axis] - low[axis] + 1 for axis in range(3)], dtype=np.float32)
+        filled = ((source[..., 0] & 0x80) != 0).astype(np.float32)
+        core = filled.copy()
+        for axis in range(3):
+            total = weave(total, weights[axis], axis)
+            filled = weave(filled, weights[axis], axis)
+            core = weave(core, cores[axis], axis)
+        occupied = ((total > 0.0) & (filled >= 0.5 * total)) | (core >= 1.0 - 1e-6)
+
+        picked = gather((0, 0, 0))
+        empty = occupied & ((picked[..., 0] & 0x80) == 0)
+        reach = int(math.ceil(max(1.0 / value for value in factor))) + 1
+        offsets = []
+        for distance in range(1, reach + 1):
+            for axis in range(3):
+                for side in (-1, 1):
+                    shift = [0, 0, 0]
+                    shift[axis] = side * distance
+                    offsets.append(tuple(shift))
+        for shift in offsets:
+            if not empty.any():
+                break
+            shifted = gather(shift)
+            take = empty & ((shifted[..., 0] & 0x80) != 0)
+            picked = np.where(take[..., None], shifted, picked)
+            empty &= ~take
+        occupied &= ~empty
+        block = np.where(occupied[..., None], picked, np.zeros(4, dtype=np.uint8)).astype(np.uint8)
 
         new = np.zeros_like(self._data)
-        sx, sy, sz = source_axes
-        new[low[0]:low[0] + sx.size, low[1]:low[1] + sy.size, low[2]:low[2] + sz.size] = self._data[np.ix_(sx, sy, sz)]
+        new[cells[0][0]:cells[0][1] + 1, cells[1][0]:cells[1][1] + 1, cells[2][0]:cells[2][1] + 1] = block
         self._data = new
         return None
 
