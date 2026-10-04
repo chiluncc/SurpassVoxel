@@ -39,7 +39,7 @@ def _load_palette(path: Path) -> tuple[str, np.ndarray[tuple[int, Literal[4]], n
     return name, palette
 
 
-type PALETTE_TYPE = Literal["VGA_16", "MAGICVOXEL_255"]
+type PaletteType = Literal["VGA_16", "MAGICVOXEL_255"]
 
 
 def get_palette(name: str) -> np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]]:
@@ -75,7 +75,7 @@ class ColorSpace:
             self,
             palette: np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]],
             *,
-            name: PALETTE_TYPE | None = None,
+            name: PaletteType | None = None,
             mask: tuple[bool, ...] | None = None,
             ):
         palette = np.array(palette)
@@ -104,7 +104,7 @@ class ColorSpace:
         return tuple(self._mask.tolist())
 
     @property
-    def name(self) -> PALETTE_TYPE | None:
+    def name(self) -> PaletteType | None:
         return self._name
 
     def get_color(

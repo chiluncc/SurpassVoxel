@@ -12,20 +12,20 @@ type _OutputType = np.ndarray[tuple[int], np.dtype[np.uint32]]
 
 class BaseShape(ABC):
 
-    def __init__(self, *, mask: _ItemType | None = None, value: _ItemType | None = None):
+    def __init__(self, *, mask: _ItemType | None = None, condition: _ItemType | None = None):
         super().__init__()
-        if (mask is None) ^ (value is None):
-            raise ValueError("mask and value must be given together")
+        if (mask is None) ^ (condition is None):
+            raise ValueError("mask and condition must be given together")
         self._mask = np.zeros(0, dtype=np.uint8) if mask is None else mask
-        self._value = np.zeros(0, dtype=np.uint8) if value is None else value
+        self._condition = np.zeros(0, dtype=np.uint8) if condition is None else condition
 
     @property
     def mask(self) -> _ItemType:
         return self._mask
 
     @property
-    def value(self) -> _ItemType:
-        return self._value
+    def condition(self) -> _ItemType:
+        return self._condition
 
     @abstractmethod
     def get_masked(self, data: _InputType) -> _OutputType:
@@ -40,7 +40,7 @@ def _masked_indices(
         data: _InputType,
         mask_fn: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
         mask: _ItemType,
-        value: _ItemType,
+        condition: _ItemType,
         v1: Vector,
         v2: Vector,
         ) -> _OutputType:
@@ -58,7 +58,7 @@ def _masked_indices(
 
     if mask.any():
         item = data[x0:x1 + 1, y0:y1 + 1, z0:z1 + 1]
-        inside = inside & (((item ^ value) & mask) == 0).all(axis=-1)
+        inside = inside & (((item ^ condition) & mask) == 0).all(axis=-1)
 
     local = np.flatnonzero(inside)
     x_offset, remainder = np.divmod(local, (y1 - y0 + 1) * (z1 - z0 + 1))
@@ -76,9 +76,9 @@ class PointShape(BaseShape):
             position: Vector,
             *,
             mask: _ItemType | None = None,
-            value: _ItemType | None = None,
+            condition: _ItemType | None = None,
             ):
-        super().__init__(mask=mask, value=value)
+        super().__init__(mask=mask, condition=condition)
         self._position = position
 
     @property
@@ -90,7 +90,7 @@ class PointShape(BaseShape):
             data,
             lambda xs, ys, zs: np.ones((xs.size, ys.size, zs.size), dtype=bool),
             self._mask,
-            self._value,
+            self._condition,
             self._position,
             self._position,
         )
@@ -107,9 +107,9 @@ class BoxShape(BaseShape):
             size: Vector,
             *,
             mask: _ItemType | None = None,
-            value: _ItemType | None = None,
+            condition: _ItemType | None = None,
             ):
-        super().__init__(mask=mask, value=value)
+        super().__init__(mask=mask, condition=condition)
         self._position = position
         self._size = size
 
@@ -126,7 +126,7 @@ class BoxShape(BaseShape):
             data,
             lambda xs, ys, zs: np.ones((xs.size, ys.size, zs.size), dtype=bool),
             self._mask,
-            self._value,
+            self._condition,
             self._position,
             self._position + self._size - Vector(1, 1, 1),
         )
@@ -146,9 +146,9 @@ class SphereShape(BaseShape):
             radius: int,
             *,
             mask: _ItemType | None = None,
-            value: _ItemType | None = None,
+            condition: _ItemType | None = None,
             ):
-        super().__init__(mask=mask, value=value)
+        super().__init__(mask=mask, condition=condition)
         self._position = position
         self._radius = radius
 
@@ -173,7 +173,7 @@ class SphereShape(BaseShape):
             data,
             self._mask_fn,
             self._mask,
-            self._value,
+            self._condition,
             self._position - radius,
             self._position + radius,
         )
@@ -194,9 +194,9 @@ class CylinderShape(BaseShape):
             y_size: int,
             *,
             mask: _ItemType | None = None,
-            value: _ItemType | None = None,
+            condition: _ItemType | None = None,
             ):
-        super().__init__(mask=mask, value=value)
+        super().__init__(mask=mask, condition=condition)
         self._position = position
         self._radius = radius
         self._y_size = y_size
@@ -224,7 +224,7 @@ class CylinderShape(BaseShape):
             data,
             self._mask_fn,
             self._mask,
-            self._value,
+            self._condition,
             self._position - radius,
             self._position + radius + Vector(0, self._y_size - 1, 0),
         )
@@ -250,9 +250,9 @@ class PrismShape(BaseShape):
             height: int,
             *,
             mask: _ItemType | None = None,
-            value: _ItemType | None = None,
+            condition: _ItemType | None = None,
             ):
-        super().__init__(mask=mask, value=value)
+        super().__init__(mask=mask, condition=condition)
         self._position = position
         self._vertices = (v0, v1, v2,)
         self._height = height
@@ -319,7 +319,7 @@ class PrismShape(BaseShape):
             data,
             self._mask_fn,
             self._mask,
-            self._value,
+            self._condition,
             v1,
             v2 + Vector(0, self._height - 1, 0),
         )
@@ -340,9 +340,9 @@ class PyramidShape(BaseShape):
             v3: Vector,
             *,
             mask: _ItemType | None = None,
-            value: _ItemType | None = None,
+            condition: _ItemType | None = None,
             ):
-        super().__init__(mask=mask, value=value)
+        super().__init__(mask=mask, condition=condition)
         self._position = position
         self._vertices = (v0, v1, v2, v3)
 
@@ -395,7 +395,7 @@ class PyramidShape(BaseShape):
             data,
             self._mask_fn,
             self._mask,
-            self._value,
+            self._condition,
             *self._bounds(),
         )
 
