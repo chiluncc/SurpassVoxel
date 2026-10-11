@@ -7,12 +7,14 @@ import numpy as np
 from pathlib import Path
 from typing import Literal
 
+from surpassvoxel.structures.typing import ColorType, ColorsType
 
-_palettes: dict[str, np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]]] | None = None
+
+_palettes: dict[str, ColorsType] | None = None
 _palette_lock = threading.Lock()
 
 
-def _load_palette(path: Path) -> tuple[str, np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]]]:
+def _load_palette(path: Path) -> tuple[str, ColorsType]:
     PALETTE_TERMINATOR = b"\x00\x00\x00\x00"
 
     blob = path.read_bytes()
@@ -39,10 +41,7 @@ def _load_palette(path: Path) -> tuple[str, np.ndarray[tuple[int, Literal[4]], n
     return name, palette
 
 
-type PaletteType = Literal["VGA_16", "MAGICVOXEL_255"]
-
-
-def get_palette(name: str) -> np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]]:
+def get_palette(name: str) -> ColorsType:
     PALETTE_DIR = Path(__file__).resolve().parents[1] / "resources" / "colors"
 
     global _palettes
@@ -60,41 +59,30 @@ def get_palette(name: str) -> np.ndarray[tuple[int, Literal[4]], np.dtype[np.uin
                 _palettes = loaded
 
     try:
-        return _palettes[name]
+        return _palettes[name].copy()
     except KeyError:
         raise ValueError(f"unknown palette {name!r}, available: {sorted(_palettes)}") from None
-
-
-type ColorType = np.ndarray[Literal[4], np.dtype[np.uint8]]
-type ColorTypes = np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]]
 
 
 class ColorSpace:
     
     def __init__(
             self,
-            palette: np.ndarray[tuple[int, Literal[4]], np.dtype[np.uint8]],
+            color_space_id: str,
             *,
-            name: PaletteType | None = None,
-            mask: tuple[bool, ...] | None = None,
-            ):
-        palette = np.array(palette)
-        if palette.ndim != 2 or palette.shape[1] != 4:
-            raise ValueError(f"palette must have shape (entries, 4), got {palette.shape}")
-        if palette.shape[0] == 0:
-            raise ValueError("palette is empty")
-
+            mask: tuple[bool, bool, bool, bool] | None = None,
+            ) -> None:
+        palette = get_palette(color_space_id)
+        
         if mask is None:
             mask = (True, True, True, True)
-        else:
-            mask = (*(mask), True, True, True, True)[:4]
         if not any(mask):
             raise ValueError("at least one channel must be valid")
 
         self._palette = palette
         self._mask = np.array(mask, dtype=bool)
         self._masked_palette = palette[:, self._mask].astype(np.int32)
-        self._name = name
+        self._name = color_space_id
 
     def __len__(self) -> int:
         return self._palette.shape[0]
@@ -104,30 +92,28 @@ class ColorSpace:
         return tuple(self._mask.tolist())
 
     @property
-    def name(self) -> PaletteType | None:
+    def name(self) -> str:
         return self._name
 
     def get_color(
             self,
             index: int | np.ndarray[tuple[int], np.dtype[int]],
-            ) -> ColorType | ColorTypes | None:
+            ) -> ColorType | ColorsType:
+        
         if isinstance(index, np.ndarray):
-            if index.size and (index.min() < 0 or index.max() >= len(self)):
-                return None
-            return self._palette[index]
-        if not 0 <= index < len(self):
-            return None
+            return self._palette[index].copy()
         return self._palette[index].copy()
 
-    def get_index(self, rgba: ColorType | ColorTypes) -> int | np.ndarray[tuple[int], np.dtype[int]]:
+    def get_index(
+            self,
+            rgba: ColorType | ColorsType
+            ) -> int | np.ndarray[tuple[int], np.dtype[int]]:
+        
         if rgba.ndim == 2:
-            colors = rgba.astype(np.int32)[:, self._mask]
-            diff = self._masked_palette[None] - colors[:, None]
+            querys = rgba.astype(np.int32)[:, self._mask]
+            diff = self._masked_palette[None] - querys[:, None]
             return (diff ** 2).sum(axis=2).argmin(axis=1)
 
-        query = rgba.reshape(-1).astype(np.int32)
-        if query.size != 4:
-            raise ValueError(f"expected four channels, got {query.size}")
-
-        diff = self._masked_palette - query[self._mask]
+        query = rgba.astype(np.int32)[self._mask]
+        diff = self._masked_palette - query
         return int((diff ** 2).sum(axis=1).argmin())

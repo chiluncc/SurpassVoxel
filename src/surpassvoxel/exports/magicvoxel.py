@@ -3,39 +3,38 @@ import numpy as np
 from pathlib import Path
 
 from surpassvoxel.structures.voxel import Voxel
-from surpassvoxel.structures.color import ColorSpace, get_palette
+from surpassvoxel.structures.color import ColorSpace
 
 
 def transform_to_magicvoxel(data: Voxel, path: Path) -> None:
     fixed = (Path(__file__).resolve().parents[1] / "resources" / "exports" / "magicvoxel_fixed.bin").read_bytes()
 
-    colors = get_palette(data.color_space_type)
+    colors = data.color_space.get_color(np.arange(len(data.color_space)))
     if len(colors) > 255:
-        data = data.change_color_space(ColorSpace(get_palette("MAGICVOXEL_255"), name="MAGICVOXEL_255"))
-        colors = get_palette(data.color_space_type)
+        data = data.convert_color_space(ColorSpace("MAGICVOXEL_255"))
+        colors = data.color_space.get_color(np.arange(len(data.color_space)))
 
     palette = np.zeros((256, 4), dtype=np.uint8)
     palette[:len(colors)] = colors
 
     nx, ny, nz = data.shape
-    flat = data.data
-    idx = np.flatnonzero(flat[:, 0] & 0x80)
-
-    x = idx // (ny * nz)
-    y = (idx // nz) % ny
-    z = idx % nz
+    items = data.voxel_items
+    occupied = (items[..., 0] & 0x80) != 0
+    xyz = np.argwhere(occupied)
+    count = xyz.shape[0]
+    x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
     order = np.lexsort((x, z, y))
 
-    entries = np.empty((idx.size, 4), dtype=np.uint8)
+    entries = np.empty((count, 4), dtype=np.uint8)
     entries[:, 0] = x[order]
     entries[:, 1] = z[order]
     entries[:, 2] = y[order]
-    entries[:, 3] = flat[idx[order], 1] + 1
+    entries[:, 3] = items[..., 1][occupied][order] + 1
 
     size = b"SIZE" + struct.pack("<I", 12) + struct.pack("<I", 0) + struct.pack("<III", nx, nz, ny)
     xyzi = (
-        b"XYZI" + struct.pack("<I", 4 + 4 * idx.size) + struct.pack("<I", 0)
-        + struct.pack("<I", idx.size) + entries.tobytes()
+        b"XYZI" + struct.pack("<I", 4 + 4 * count) + struct.pack("<I", 0)
+        + struct.pack("<I", count) + entries.tobytes()
     )
     blob = (
         b"VOX " + struct.pack("<I", 200)

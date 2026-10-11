@@ -3,17 +3,35 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
+from surpassvoxel.structures.typing import GridBool, Vector2Di, Vector3Df, Vector3Dfs, Vector3Dis
 from surpassvoxel.structures.voxel import Voxel
 
 
+_VIEW_AXES: dict[str, tuple[Vector3Df, Vector3Df, Vector3Df]] = {
+    "front": (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0])),
+    "top": (np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, -1.0]), np.array([0.0, 1.0, 0.0])),
+    "right": (np.array([0.0, 0.0, -1.0]), np.array([0.0, 1.0, 0.0]), np.array([1.0, 0.0, 0.0])),
+}
+_UP_Y: Vector3Df = np.array([0.0, 1.0, 0.0])
+_BACK: Vector3Df = np.array([0.0, 0.0, -1.0])
+_LIGHT_SEED: Vector3Df = np.array([0.5, 0.7, 0.5])
+_GRID_FINE: Vector3Df = np.array([92.0, 92.0, 104.0])
+_GRID_MAJOR: Vector3Df = np.array([150.0, 150.0, 162.0])
+
+
 def _trace(
-        origin: np.ndarray,
-        direction: np.ndarray,
-        occupied: np.ndarray,
-        mask: np.ndarray | None = None,
-        ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        origin: Vector3Dfs,
+        direction: Vector3Dfs,
+        occupied: GridBool,
+        mask: GridBool | None = None,
+        ) -> tuple[
+            np.ndarray[tuple[int], np.dtype[np.bool_]],
+            Vector3Dis,
+            Vector3Dis,
+            np.ndarray[tuple[int], np.dtype[np.float64]],
+        ]:
     shape = np.array(occupied.shape, dtype=np.float64)
-    limits = np.array(occupied.shape, dtype=np.int64)
+    limits = np.array(occupied.shape, dtype=np.int32)
     count = origin.shape[0]
 
     parallel = direction == 0.0
@@ -32,22 +50,22 @@ def _trace(
     active = (enter <= leave) & (leave > 0.0)
     enter = np.maximum(enter, 0.0) + 1e-9
 
-    step = np.sign(direction).astype(np.int64)
+    step = np.sign(direction).astype(np.int32)
     with np.errstate(divide="ignore", invalid="ignore"):
         delta = np.where(step != 0, np.abs(1.0 / np.where(direction == 0.0, 1.0, direction)), np.inf)
-        cell = np.floor(origin + enter[:, None] * direction).astype(np.int64)
+        cell = np.floor(origin + enter[:, None] * direction).astype(np.int32)
         plane = np.where(step > 0, cell + 1.0, cell.astype(np.float64))
         t_max = (plane - origin) / np.where(direction == 0.0, 1.0, direction)
     t_max = np.where(step != 0, t_max, np.inf)
     t = enter
     rows = np.arange(count)
     entry = np.argmax(t_low, axis=1)
-    normal = np.zeros((count, 3), dtype=np.int64)
+    normal = np.zeros((count, 3), dtype=np.int32)
     normal[rows, entry] = -step[rows, entry]
 
     hit = np.zeros(count, dtype=bool)
-    hit_cell = np.zeros((count, 3), dtype=np.int64)
-    hit_normal = np.zeros((count, 3), dtype=np.int64)
+    hit_cell = np.zeros((count, 3), dtype=np.int32)
+    hit_normal = np.zeros((count, 3), dtype=np.int32)
     hit_t = np.zeros(count, dtype=np.float64)
 
     for _ in range(int(limits.sum()) + 3):
@@ -89,22 +107,17 @@ def _trace(
 def _render_ortho(
         voxel: Voxel,
         view: str,
-        window: int | tuple[int, int] | None,
+        window: int | Vector2Di | None,
         size: int | None,
         depth_fade: float,
         path: str | Path | None,
         ) -> Image.Image:
-    right, up, depth = {
-        "front": ((1, 0, 0), (0, 1, 0), (0, 0, 1)),
-        "top": ((1, 0, 0), (0, 0, -1), (0, 1, 0)),
-        "right": ((0, 0, -1), (0, 1, 0), (1, 0, 0)),
-    }[view]
-    right, up, depth = (np.array(vector, dtype=np.float64) for vector in (right, up, depth))
+    right, up, depth = _VIEW_AXES[view]
     horizontal = int(np.argmax(np.abs(right)))
     vertical = int(np.argmax(np.abs(up)))
     deep = int(np.argmax(np.abs(depth)))
 
-    layers = voxel.data.reshape(*voxel.shape, 4)
+    layers = voxel.voxel_items
     occupied = (layers[..., 0] & 0x80) != 0
     index = layers[..., 1].astype(np.int64)
     colors = np.asarray(voxel.color_space.get_color(np.arange(len(voxel.color_space))), dtype=np.float64)[:, :3]
@@ -114,9 +127,7 @@ def _render_ortho(
 
     mask = None
     if window is not None:
-        bounds = (int(window), int(window)) if isinstance(window, (int, np.integer)) else tuple(int(v) for v in window)
-        if len(bounds) != 2:
-            raise ValueError("slice must be an int or a (start, stop) pair")
+        bounds = (int(window), int(window)) if isinstance(window, (int, np.integer)) else (int(window[0]), int(window[1]))
         mask = np.zeros(voxel.shape, dtype=bool)
         low, high = max(0, bounds[0]), min(voxel.shape[deep] - 1, bounds[1])
         if low <= high:
@@ -162,8 +173,7 @@ def _render_ortho(
     image = Image.fromarray(canvas.clip(0, 255).astype(np.uint8))
     fine = 1 if scale >= 10 else 2 if scale >= 5 else 5 if scale >= 3 else 10
     grid = np.asarray(image, dtype=np.float64)
-    for step, alpha, color in ((fine, 0.30, (92, 92, 104)), (10, 0.55, (150, 150, 162))):
-        color = np.array(color, dtype=np.float64)
+    for step, alpha, color in ((fine, 0.30, _GRID_FINE), (10, 0.55, _GRID_MAJOR)):
         for boundary in range(0, voxel.shape[horizontal] + 1, step):
             if step != 10 and boundary % 10 == 0:
                 continue
@@ -200,7 +210,7 @@ def _render_ortho(
 
 def render_perspective(
         voxel: Voxel,
-        position: tuple[float, float, float],
+        position: Vector3Df,
         *,
         fov: float = 60.0,
         size: int | None = None,
@@ -208,7 +218,7 @@ def render_perspective(
         sun: float = 0.70,
         path: str | Path | None = None,
         ) -> Image.Image:
-    layers = voxel.data.reshape(*voxel.shape, 4)
+    layers = voxel.voxel_items
     occupied = (layers[..., 0] & 0x80) != 0
     index = layers[..., 1].astype(np.int64)
     colors = np.asarray(voxel.color_space.get_color(np.arange(len(voxel.color_space))), dtype=np.float64)[:, :3]
@@ -222,25 +232,22 @@ def render_perspective(
         span = int((marked.max(axis=0) - marked.min(axis=0) + 1).max())
     resolution = int(size) if size is not None else (1024 if span > 128 else 512)
 
-    eye = tuple(position)
-    if len(eye) != 3:
-        raise ValueError("position must be three numbers")
-    eye = np.array(eye, dtype=np.float64)
+    eye = position
     box = voxel.aabb()
     if box is None:
         target = (np.array(voxel.shape, dtype=np.float64) - 1.0) / 2.0
     else:
-        target = (np.array(box[0].value, dtype=np.float64) + np.array(box[1].value, dtype=np.float64) + 1.0) / 2.0
+        target = (box[0] + box[1] + 1.0) / 2.0
 
     forward = target - eye
     distance = float(np.linalg.norm(forward))
-    forward = np.array([0.0, 0.0, -1.0]) if distance < 1e-9 else forward / distance
-    right = np.cross(forward, np.array([0.0, 1.0, 0.0]))
+    forward = _BACK if distance < 1e-9 else forward / distance
+    right = np.cross(forward, _UP_Y)
     if float(np.linalg.norm(right)) < 1e-6:
-        right = np.cross(forward, np.array([0.0, 0.0, -1.0]))
+        right = np.cross(forward, _BACK)
     right = right / float(np.linalg.norm(right))
     up = np.cross(right, forward)
-    light = np.array([0.5, 0.7, 0.5])
+    light = _LIGHT_SEED
     light = light / float(np.linalg.norm(light))
     light = light[0] * right + light[1] * up - light[2] * forward
 
@@ -274,7 +281,7 @@ def render_perspective(
 def render_front(
         voxel: Voxel,
         *,
-        slice: int | tuple[int, int] | None = None,
+        slice: int | Vector2Di | None = None,
         size: int | None = None,
         depth_fade: float = 0.28,
         path: str | Path | None = None,
@@ -285,7 +292,7 @@ def render_front(
 def render_top(
         voxel: Voxel,
         *,
-        slice: int | tuple[int, int] | None = None,
+        slice: int | Vector2Di | None = None,
         size: int | None = None,
         depth_fade: float = 0.28,
         path: str | Path | None = None,
@@ -296,7 +303,7 @@ def render_top(
 def render_right(
         voxel: Voxel,
         *,
-        slice: int | tuple[int, int] | None = None,
+        slice: int | Vector2Di | None = None,
         size: int | None = None,
         depth_fade: float = 0.28,
         path: str | Path | None = None,
